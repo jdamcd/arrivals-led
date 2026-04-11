@@ -28,7 +28,7 @@ Clone this repo on the Pi and run:
 ./install.sh
 ```
 
-This creates the venv, installs Python dependencies, and downloads `fonts/6x10.bdf` — a classic X11 6×10 fixed-width bitmap font from hzeller's [`rpi-rgb-led-matrix`](https://github.com/hzeller/rpi-rgb-led-matrix) fonts folder. Three 10 px rows sit on the 32 px panel with 1 px margins top and bottom.
+This creates the venv and installs dependencies. The bundled bitmap font was generated based on [London Underground Dot Matrix Regular](https://github.com/petykowski/London-Underground-Dot-Matrix-Typeface).
 
 ## Install the arrivals CLI
 

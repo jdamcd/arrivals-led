@@ -181,7 +181,10 @@ DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 32
 N_ADDR_LINES = 4  # 64x32 panels: 16 scan rows -> log2(16) = 4
 MAX_ROWS = 3
-H_PADDING = 1  # pixels of left/right margin inside the display
+# 1 px left margin. The right side needs no padding — every glyph
+# carries a 1 px right-side bearing, so text flush to DISPLAY_WIDTH
+# still lands 1 px inside the panel edge.
+LEFT_PAD = 1
 
 # Timing
 REFRESH_INTERVAL = 60  # seconds between CLI calls
@@ -253,7 +256,7 @@ def render(frame_img, framebuffer, matrix, font, layout, data, blink_on):
     draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), fill=BLACK)
 
     if not data or "arrivals" not in data:
-        font.draw_text(frame_img, (H_PADDING, row_tops[1]), "No data", YELLOW)
+        font.draw_text(frame_img, (LEFT_PAD, row_tops[1]), "No data", YELLOW)
     else:
         for i, arrival in enumerate(data["arrivals"][:MAX_ROWS]):
             y = row_tops[i]
@@ -261,15 +264,15 @@ def render(frame_img, framebuffer, matrix, font, layout, data, blink_on):
             time_str = arrival["displayTime"]
 
             time_width = font.text_width(time_str)
-            name_budget = DISPLAY_WIDTH - 2 * H_PADDING - time_width - gap_px
+            name_budget = DISPLAY_WIDTH - LEFT_PAD - time_width - gap_px
             name = font.truncate_to_width(name, name_budget)
 
-            font.draw_text(frame_img, (H_PADDING, y), name, YELLOW)
+            font.draw_text(frame_img, (LEFT_PAD, y), name, YELLOW)
             # When blinking off for due trains, drop the time only.
             if not (arrival["isDue"] and not blink_on):
                 font.draw_text(
                     frame_img,
-                    (DISPLAY_WIDTH - H_PADDING - time_width, y),
+                    (DISPLAY_WIDTH - time_width, y),
                     time_str,
                     YELLOW,
                 )
@@ -277,15 +280,11 @@ def render(frame_img, framebuffer, matrix, font, layout, data, blink_on):
     commit_frame(frame_img, framebuffer, matrix)
 
 
-_FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "6x10.bdf")
+_FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "LUR.bdf")
 
 
 def load_font():
-    """Load the bundled 6x10 bitmap font."""
-    if not os.path.exists(_FONT_PATH):
-        raise FileNotFoundError(
-            f"Font not found: {_FONT_PATH}. Run ./install.sh to fetch it."
-        )
+    """Load the bundled bitmap font."""
     return BDFFont(_FONT_PATH)
 
 
@@ -296,11 +295,14 @@ def measure_layout(font):
     # Minimum gap between name and time: width of a space glyph, or 2 px.
     gap_px = max(2, font.char_width(" "))
 
-    # Pack rows at the tight font pitch and centre the block vertically,
-    # so leftover pixels split evenly between top and bottom margins.
-    row_spacing = char_height
-    top_offset = max(0, (DISPLAY_HEIGHT - row_spacing * MAX_ROWS) // 2)
-    row_tops = [top_offset + i * row_spacing for i in range(MAX_ROWS)]
+    # Spread unused vertical pixels across MAX_ROWS+1 slots (top margin,
+    # inter-row gaps, bottom margin) so rows breathe. Any odd pixel left
+    # by integer division nudges the top margin down by half.
+    slots = MAX_ROWS + 1
+    slack = max(0, DISPLAY_HEIGHT - char_height * MAX_ROWS)
+    row_gap = slack // slots
+    top_offset = row_gap + (slack % slots) // 2
+    row_tops = [top_offset + i * (char_height + row_gap) for i in range(MAX_ROWS)]
 
     return {
         "row_tops": row_tops,

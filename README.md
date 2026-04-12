@@ -2,6 +2,9 @@
 
 Public-transit arrivals on a 128×32 HUB75 LED display, driven by a Raspberry Pi 5. This is the Python-side renderer that calls the [arrivals-kmp](https://github.com/jdamcd/arrivals-kmp) CLI for data.
 
+
+![LED matrix showing train arrivals](led_matrix.jpeg)
+
 ## Hardware
 
 - Raspberry Pi 5
@@ -55,7 +58,7 @@ python arrivals.py "arrivals --json tfl --station 910GSHRDHST --platform 2"
 
 ## Optional: auto-start via systemd (user service)
 
-A template unit is in `systemd/arrivals-led.service`. To install:
+There's a template in `systemd/arrivals-led.service`. To install:
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -66,8 +69,15 @@ systemctl --user enable --now arrivals-led
 loginctl enable-linger $USER   # so it runs when you're not logged in
 ```
 
-## Troubleshooting
+## Tips & troubleshooting
 
-- **`/dev/pio0: permission denied`** — the Adafruit udev rule isn't in place. Re-check the Pi 5 guide's udev section.
-- **Second panel blank / mirrored** — check the HUB75 ribbon between panels and try `Orientation.R180`.
-- **Panels flicker or glitch under load** — usually a power-supply issue; check the 5V rail under load.
+- **`/dev/pio0: permission denied`**: The Adafruit udev rule isn't in place. Check the Pi 5 guide's udev section.
+- **Power**: If you have any power issues, try powering the Pi 5 separately via the standard 27W USB-C adapter.
+- **Certain rows flicker briefly during data refresh**: The Piomatter blit thread (which sends frame data to the PIO hardware) can be preempted by the Linux scheduler, especially when a subprocess is running. To fix this, isolate a CPU core for the blit thread:
+  1. Install the patched Piomatter from [this branch](https://github.com/lehni/Adafruit_Blinka_Raspberry_Pi5_Piomatter/tree/pin-blit-thread-to-isolated-cpu) which pins the blit thread to an isolated core:
+     ```bash
+     pip install git+https://github.com/lehni/Adafruit_Blinka_Raspberry_Pi5_Piomatter.git@pin-blit-thread-to-isolated-cpu
+     ```
+  2. Reserve CPU core 3 by appending `isolcpus=3` to the existing line in `/boot/firmware/cmdline.txt`, then reboot.
+
+  See [Piomatter PR #79](https://github.com/adafruit/Adafruit_Blinka_Raspberry_Pi5_Piomatter/pull/79) for more details.

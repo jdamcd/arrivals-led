@@ -1,4 +1,4 @@
-# arrivals-led
+# LED Matrix Arrivals
 
 Public-transit arrivals on a 128×32 HUB75 LED display, driven by a Raspberry Pi 5. This is the Python-side renderer that calls the [arrivals-kmp](https://github.com/jdamcd/arrivals-kmp) CLI for data.
 

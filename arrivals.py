@@ -181,10 +181,8 @@ DISPLAY_WIDTH = 128
 DISPLAY_HEIGHT = 32
 N_ADDR_LINES = 4  # 64x32 panels: 16 scan rows -> log2(16) = 4
 MAX_ROWS = 3
-# 1 px left margin. The right side needs no padding — every glyph
-# carries a 1 px right-side bearing, so text flush to DISPLAY_WIDTH
-# still lands 1 px inside the panel edge.
-LEFT_PAD = 1
+ROW_GAP = 2   # pixels between rows
+LEFT_PAD = 1  # right side needs none — glyphs have a 1 px right-side bearing
 
 # Timing
 REFRESH_INTERVAL = 60  # seconds between CLI calls
@@ -295,14 +293,7 @@ def measure_layout(font):
     # Minimum gap between name and time: width of a space glyph, or 2 px.
     gap_px = max(2, font.char_width(" "))
 
-    # Spread unused vertical pixels across MAX_ROWS+1 slots (top margin,
-    # inter-row gaps, bottom margin) so rows breathe. Any odd pixel left
-    # by integer division nudges the top margin down by half.
-    slots = MAX_ROWS + 1
-    slack = max(0, DISPLAY_HEIGHT - char_height * MAX_ROWS)
-    row_gap = slack // slots
-    top_offset = row_gap + (slack % slots) // 2
-    row_tops = [top_offset + i * (char_height + row_gap) for i in range(MAX_ROWS)]
+    row_tops = [i * (char_height + ROW_GAP) for i in range(MAX_ROWS)]
 
     return {
         "row_tops": row_tops,

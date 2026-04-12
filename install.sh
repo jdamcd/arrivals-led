@@ -16,6 +16,11 @@ if [ ! -d venv ]; then
     python3 -m venv venv
 fi
 
+if ! dpkg -s libcurl4 &>/dev/null; then
+    echo "Installing libcurl (required by arrivals CLI)..."
+    sudo apt-get install -y libcurl4
+fi
+
 echo "Installing Python dependencies..."
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install -r requirements.txt

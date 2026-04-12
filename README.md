@@ -35,16 +35,24 @@ This creates the venv and installs dependencies. The bundled bitmap font was gen
 
 ## Install the arrivals CLI
 
-The Python script calls the `arrivals` binary from [jdamcd/arrivals-kmp](https://github.com/jdamcd/arrivals-kmp). This requires Java:
+The Python script calls the `arrivals` binary from [jdamcd/arrivals-kmp](https://github.com/jdamcd/arrivals-kmp). Cross-compile the native CLI for ARM Linux from a macOS or x86 Linux machine:
 
 ```bash
-sudo apt install default-jdk
+# In the arrivals-kmp repo
+./gradlew :cli:linkReleaseExecutableLinuxArm64
 ```
 
-Follow the install instructions in that repo to build the CLI and put `arrivals` on your `PATH`. Verify:
+Then copy the binary to the Pi and put it on your `PATH`:
 
 ```bash
-arrivals --json tfl --station 910GSHRDHST | jq
+scp cli/build/bin/linuxArm64/releaseExecutable/cli.kexe <user>@<host>:/tmp/arrivals
+ssh <user>@<host> 'sudo mv /tmp/arrivals /usr/local/bin/arrivals'
+```
+
+Verify:
+
+```bash
+arrivals --json tfl --station 910GSHRDHST
 ```
 
 You should get a JSON object with `station` and `arrivals` fields.

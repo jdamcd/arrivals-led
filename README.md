@@ -3,13 +3,13 @@
 Public-transit arrivals on a 128×32 HUB75 LED display, driven by a Raspberry Pi 5. This is the Python-side renderer that calls the [arrivals-kmp](https://github.com/jdamcd/arrivals-kmp) CLI for data.
 
 
-![LED matrix showing train arrivals](led_matrix.jpeg)
+![LED matrix showing train arrivals](readme-img/led_matrix.jpeg)
 
 ## Hardware
 
 - Raspberry Pi 5
 - [Adafruit RGB Matrix Bonnet](https://www.adafruit.com/product/3211)
-- 2× 64×32 HUB75 RGB LED panels, chained horizontally → 128×32
+- 2× 64×32 HUB75 RGB LED panels (2.5mm pitch), chained horizontally → 128×32
 - 5V power supply (10A recommended to power both panels)
 
 ### Chaining the panels
@@ -76,6 +76,15 @@ systemctl --user daemon-reload
 systemctl --user enable --now arrivals-led
 loginctl enable-linger $USER   # so it runs when you're not logged in
 ```
+
+## Parts
+
+I've included a couple of models for 3D-printed parts that may be useful:
+
+- Bracket to connect the 2x LED panels horizontally (with M3 screws)
+- Riser to attach the Pi 5 (with M2.5 & M3 screws)
+
+![The back of the hardware](readme-img/led_back.jpeg)
 
 ## Tips & troubleshooting
 

@@ -2,17 +2,16 @@
 """
 Arrivals LED Matrix Display
 
-Drives 2x chained 64x32 HUB75 panels (128x32 pixels) on a Raspberry Pi 5
-via adafruit_blinka_raspberry_pi5_piomatter. Fetches arrival data by
-calling the arrivals-kmp CLI with --json output.
+Drives 2x chained 64x32 HUB75 panels (128x32 pixels) via the Adafruit RGB
+Matrix Bonnet. Fetches arrival data by calling the arrivals-kmp CLI with
+--json output.
+
+Supported hardware:
+    - Raspberry Pi 5 (piomatter driver, PIO-based)
+    - Raspberry Pi Zero 2 W (rgbmatrix driver, hzeller's rpi-rgb-led-matrix)
 
 Usage:
-    python3 arrivals.py "arrivals --json tfl --station 910GSHRDHST"
-
-Hardware:
-    - Raspberry Pi 5
-    - Adafruit RGB Matrix Bonnet
-    - 2x 64x32 HUB75 RGB LED panels, chained (panel 1 OUT -> panel 2 IN)
+    python3 arrivals.py "arrivals --json tfl --station 910GSHRDHST --platform 2"
 """
 
 import argparse
@@ -25,10 +24,7 @@ import subprocess
 import sys
 import time
 
-import numpy as np
 from PIL import Image, ImageDraw
-
-import adafruit_blinka_raspberry_pi5_piomatter as piomatter
 
 
 # The font supports A-Z, a-z, 0-9, space, and - ' & * + : , .
@@ -196,27 +192,84 @@ YELLOW = tuple(int(c * BRIGHTNESS) for c in YELLOW_RAW)
 BLACK = (0, 0, 0)
 
 # This panel is wired in "RBG" order: byte 1 drives blue, byte 2 drives
-# green. When committing a PIL RGB image to the framebuffer we swap the
-# G and B channels so colours show correctly.
+# green. The piomatter driver swaps channels when copying to the framebuffer;
+# the rgbmatrix driver handles this via its led_rgb_sequence option.
 CHANNEL_PERM = [0, 2, 1]
 
 
-def create_matrix():
-    frame_img = Image.new("RGB", (DISPLAY_WIDTH, DISPLAY_HEIGHT), BLACK)
-    framebuffer = np.asarray(frame_img) + 0  # mutable numpy copy
-    geometry = piomatter.Geometry(
-        width=DISPLAY_WIDTH,
-        height=DISPLAY_HEIGHT,
-        n_addr_lines=N_ADDR_LINES,
-        rotation=piomatter.Orientation.Normal,
-    )
-    matrix = piomatter.PioMatter(
-        colorspace=piomatter.Colorspace.RGB888Packed,
-        pinout=piomatter.Pinout.AdafruitMatrixBonnet,
-        framebuffer=framebuffer,
-        geometry=geometry,
-    )
-    return matrix, frame_img, framebuffer
+def detect_driver():
+    """Auto-detect the appropriate driver from /proc/device-tree/model."""
+    try:
+        with open("/proc/device-tree/model", "r") as f:
+            model = f.read().strip("\x00").strip()
+        print(f"Detected: {model}")
+        if "Pi 5" in model:
+            return "piomatter"
+        return "rgbmatrix"
+    except OSError:
+        return "piomatter"
+
+
+class PiomatterDriver:
+    """Drives HUB75 panels on a Raspberry Pi 5 via PIO hardware."""
+
+    def __init__(self):
+        import adafruit_blinka_raspberry_pi5_piomatter as piomatter
+        import numpy as np
+
+        self._np = np
+        self.frame_img = Image.new("RGB", (DISPLAY_WIDTH, DISPLAY_HEIGHT), BLACK)
+        self._framebuffer = np.asarray(self.frame_img) + 0  # mutable numpy copy
+        geometry = piomatter.Geometry(
+            width=DISPLAY_WIDTH,
+            height=DISPLAY_HEIGHT,
+            n_addr_lines=N_ADDR_LINES,
+            rotation=piomatter.Orientation.Normal,
+        )
+        self._matrix = piomatter.PioMatter(
+            colorspace=piomatter.Colorspace.RGB888Packed,
+            pinout=piomatter.Pinout.AdafruitMatrixBonnet,
+            framebuffer=self._framebuffer,
+            geometry=geometry,
+        )
+
+    def commit(self):
+        """Copy PIL frame into the piomatter framebuffer with channel swap."""
+        self._framebuffer[:] = self._np.asarray(self.frame_img)[:, :, CHANNEL_PERM]
+        self._matrix.show()
+
+
+class RGBMatrixDriver:
+    """Drives HUB75 panels via hzeller's rpi-rgb-led-matrix (Pi Zero 2, 3, 4)."""
+
+    def __init__(self, gpio_slowdown=2):
+        from rgbmatrix import RGBMatrix, RGBMatrixOptions
+
+        options = RGBMatrixOptions()
+        options.rows = 32
+        options.cols = 64
+        options.chain_length = 2
+        options.hardware_mapping = "adafruit-hat"
+        options.led_rgb_sequence = "RBG"
+        options.gpio_slowdown = gpio_slowdown
+        # The Bonnet has no PWM circuit on the OE line.
+        options.disable_hardware_pulsing = True
+        self._matrix = RGBMatrix(options=options)
+        self.frame_img = Image.new("RGB", (DISPLAY_WIDTH, DISPLAY_HEIGHT), BLACK)
+        self._canvas = self._matrix.CreateFrameCanvas()
+
+    def commit(self):
+        """Push PIL frame to the matrix via double-buffered swap."""
+        self._canvas.SetImage(self.frame_img)
+        self._canvas = self._matrix.SwapOnVSync(self._canvas)
+
+
+def create_driver(name, gpio_slowdown=2):
+    if name == "piomatter":
+        return PiomatterDriver()
+    if name == "rgbmatrix":
+        return RGBMatrixDriver(gpio_slowdown=gpio_slowdown)
+    raise ValueError(f"Unknown driver: {name}")
 
 
 def fetch_arrivals(cmd):
@@ -239,16 +292,10 @@ def fetch_arrivals(cmd):
         return None
 
 
-def commit_frame(frame_img, framebuffer, matrix):
-    """Copy PIL frame into the piomatter framebuffer, applying the
-    panel's channel permutation."""
-    framebuffer[:] = np.asarray(frame_img)[:, :, CHANNEL_PERM]
-    matrix.show()
-
-
-def render(frame_img, framebuffer, matrix, font, layout, data, blink_on):
+def render(driver, font, layout, data, blink_on):
     row_tops = layout["row_tops"]
     gap_px = layout["gap_px"]
+    frame_img = driver.frame_img
 
     draw = ImageDraw.Draw(frame_img)
     draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), fill=BLACK)
@@ -275,7 +322,7 @@ def render(frame_img, framebuffer, matrix, font, layout, data, blink_on):
                     YELLOW,
                 )
 
-    commit_frame(frame_img, framebuffer, matrix)
+    driver.commit()
 
 
 _FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "LUR.bdf")
@@ -311,12 +358,28 @@ def main():
         default=REFRESH_INTERVAL,
         help=f"Refresh interval in seconds (default: {REFRESH_INTERVAL})",
     )
+    parser.add_argument(
+        "--driver",
+        choices=["auto", "piomatter", "rgbmatrix"],
+        default="auto",
+        help="LED matrix driver (default: auto-detect from Pi model)",
+    )
+    parser.add_argument(
+        "--gpio-slowdown",
+        type=int,
+        default=2,
+        help="GPIO slowdown for rgbmatrix driver (default: 2, try 4 for Pi 4)",
+    )
     args = parser.parse_args()
+
+    driver_name = args.driver
+    if driver_name == "auto":
+        driver_name = detect_driver()
 
     font = load_font()
     layout = measure_layout(font)
 
-    matrix, frame_img, framebuffer = create_matrix()
+    driver = create_driver(driver_name, gpio_slowdown=args.gpio_slowdown)
 
     data = None
     last_fetch = 0
@@ -330,7 +393,7 @@ def main():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, _raise_interrupt)
 
-    print(f"Starting LED display, refreshing every {args.refresh}s")
+    print(f"Starting LED display ({driver_name}), refreshing every {args.refresh}s")
     print(f"Command: {args.command}")
     print(f"Layout: row tops {layout['row_tops']}, "
           f"line height {layout['char_height']}, gap {layout['gap_px']}px")
@@ -352,16 +415,16 @@ def main():
             # flips every BLINK_INTERVAL — everything else is a no-op frame.
             render_key = (id(data), blink_on)
             if render_key != last_render_key:
-                render(frame_img, framebuffer, matrix, font, layout, data, blink_on)
+                render(driver, font, layout, data, blink_on)
                 last_render_key = render_key
 
             time.sleep(0.05)
     except KeyboardInterrupt:
         print("\nShutting down")
         # Clear the display on exit
-        draw = ImageDraw.Draw(frame_img)
+        draw = ImageDraw.Draw(driver.frame_img)
         draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), fill=BLACK)
-        commit_frame(frame_img, framebuffer, matrix)
+        driver.commit()
 
 
 if __name__ == "__main__":

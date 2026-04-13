@@ -1,0 +1,14 @@
+[Unit]
+Description=Arrivals LED Display
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/arrivals-led
+ExecStart=/home/pi/arrivals-led/venv/bin/python /home/pi/arrivals-led/arrivals.py "arrivals --json tfl --station 910GSHRDHST --platform 2"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

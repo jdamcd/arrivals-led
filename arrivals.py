@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 # The font supports A-Z, a-z, 0-9, space, and - ' & * + : , .
@@ -59,7 +59,7 @@ class BDFFont:
 
     BDF is the classic X11 bitmap font format. We only parse the bits we
     need to render ASCII text: FONT_ASCENT/DESCENT, and per-glyph ENCODING,
-    DWIDTH, BBX, and BITMAP. Good enough for fonts like hzeller's 6x10.bdf.
+    DWIDTH, BBX, and BITMAP.
     """
 
     def __init__(self, path):
@@ -137,23 +137,46 @@ class BDFFont:
         return total
 
     def truncate_to_width(self, text, max_width):
-        """Drop trailing chars until text_width(text) <= max_width."""
-        if self.text_width(text) <= max_width:
-            return text
-        while text and self.text_width(text) > max_width:
-            text = text[:-1]
+        """Return the longest prefix of text that fits within max_width pixels."""
+        w = 0
+        for i, ch in enumerate(text):
+            g = self._glyph(ord(ch))
+            cw = g["dwidth"] if g is not None else 0
+            if w + cw > max_width:
+                return text[:i]
+            w += cw
         return text
 
-    def draw_text(self, pil_image, xy, text, fill):
-        """Draw `text` into `pil_image` with (x, y_top) at `xy`."""
+    def truncate_from_end(self, text, max_width):
+        """Return the longest suffix of text that fits within max_width pixels."""
+        w = 0
+        for i in range(len(text) - 1, -1, -1):
+            g = self._glyph(ord(text[i]))
+            cw = g["dwidth"] if g is not None else 0
+            if w + cw > max_width:
+                return text[i + 1:]
+            w += cw
+        return text
+
+    def draw_text(self, pil_image, xy, text, fill, min_x=None, clip_x=None):
+        """Draw `text` into `pil_image` with (x, y_top) at `xy`.
+        Only pixels in [min_x, clip_x) are drawn (used for scroll clipping)."""
         x0, y_top = xy
         pixels = pil_image.load()
         width, height = pil_image.size
+        lo_x = min_x if min_x is not None else 0
+        hi_x = clip_x if clip_x is not None else width
         baseline = y_top + self.ascent
         x = x0
         for ch in text:
             g = self._glyph(ord(ch))
             if g is None:
+                continue
+            if x >= hi_x:
+                break
+            dwidth = g["dwidth"]
+            if x + dwidth <= lo_x:
+                x += dwidth
                 continue
             bbx_w, bbx_h, bbx_x, bbx_y = g["bbx"]
             total_bits = ((bbx_w + 7) // 8) * 8
@@ -166,9 +189,9 @@ class BDFFont:
                 for col in range(bbx_w):
                     if (row_val >> (total_bits - 1 - col)) & 1:
                         px = gx_left + col
-                        if 0 <= px < width:
+                        if lo_x <= px < hi_x:
                             pixels[px, py] = fill
-            x += g["dwidth"]
+            x += dwidth
         return x
 
 
@@ -180,9 +203,14 @@ MAX_ROWS = 3
 ROW_GAP = 2   # pixels between rows
 LEFT_PAD = 1  # right side needs none — glyphs have a 1 px right-side bearing
 
-# Timing
-REFRESH_INTERVAL = 60  # seconds between CLI calls
-BLINK_INTERVAL = 0.75  # seconds per blink toggle
+# Timing (seconds)
+REFRESH_INTERVAL = 60  # between CLI calls
+BLINK_INTERVAL = 0.75  # animate "Due"
+SCROLL_TICK = 0.05     # seconds between scroll steps (1 px/step = 20 px/sec)
+SCROLL_PAUSE_START = 20.0
+SCROLL_PAUSE_END = 5.0
+
+SCROLL_END_GAP = 4     # extra pixels to scroll past the end
 
 # 50% of LED yellow #FFDD00 (Piomatter has no brightness attribute,
 # so we scale the colour constant up-front instead of the framebuffer).
@@ -272,6 +300,92 @@ def create_driver(name, gpio_slowdown=2):
     raise ValueError(f"Unknown driver: {name}")
 
 
+_PAUSE_START = 0
+_SCROLLING = 1
+_PAUSE_END = 2
+
+
+class TextScroller:
+    """Synchronised pause-scroll-pause animation for overflowing rows.
+
+    All rows share a single phase clock so they start, scroll, and reset
+    together. Rows with less overflow hold at their end position until the
+    longest row catches up.
+    """
+
+    def __init__(self):
+        self._rows = [{"offset": 0, "overflow": 0, "name": ""}
+                      for _ in range(MAX_ROWS)]
+        self._phase = _PAUSE_START
+        self._phase_time = 0.0
+        self._any_overflow = False
+
+    def configure(self, row, name, overflow):
+        """Set name/overflow for a row. Returns True if anything changed."""
+        r = self._rows[row]
+        if name == r["name"] and overflow == r["overflow"]:
+            return False
+        r["name"] = name
+        r["offset"] = 0
+        r["overflow"] = overflow
+        self._any_overflow = any(s["overflow"] > 0 for s in self._rows)
+        return True
+
+    def reset_phase(self, now):
+        """Zero all offsets and restart the shared pause-scroll cycle."""
+        for r in self._rows:
+            r["offset"] = 0
+        self._phase = _PAUSE_START
+        self._phase_time = now
+
+    def get_offset(self, row):
+        return self._rows[row]["offset"]
+
+    def is_at_end(self, row):
+        """True if the row has scrolled to (or is holding at) its end position."""
+        r = self._rows[row]
+        return r["overflow"] > 0 and r["offset"] >= r["overflow"]
+
+    def tick(self, now):
+        """Advance shared scroll state by one step. Returns True if a redraw is needed."""
+        if not self._any_overflow:
+            return False
+
+        if self._phase == _PAUSE_START:
+            if now - self._phase_time >= SCROLL_PAUSE_START:
+                self._phase = _SCROLLING
+            return False
+
+        if self._phase == _SCROLLING:
+            changed = False
+            done = True
+            for r in self._rows:
+                ov = r["overflow"]
+                if ov <= 0:
+                    continue
+                if r["offset"] < ov:
+                    r["offset"] += 1
+                    changed = True
+                    if r["offset"] < ov:
+                        done = False
+            if done:
+                self._phase = _PAUSE_END
+                self._phase_time = now
+            return changed
+
+        if self._phase == _PAUSE_END:
+            if now - self._phase_time >= SCROLL_PAUSE_END:
+                for r in self._rows:
+                    if r["overflow"] > 0:
+                        r["offset"] = 0
+                self._phase = _PAUSE_START
+                self._phase_time = now
+                return True
+            return False
+
+        return False
+
+
 def fetch_arrivals(cmd):
     try:
         result = subprocess.run(
@@ -292,33 +406,86 @@ def fetch_arrivals(cmd):
         return None
 
 
-def render(driver, font, layout, data, blink_on):
-    row_tops = layout["row_tops"]
+def prepare_rows(font, layout, data, short_times=False):
+    """Pre-compute per-row display data from arrival data."""
     gap_px = layout["gap_px"]
+    arrivals = (data or {}).get("arrivals", [])
+    rows = []
+    for arrival in arrivals[:MAX_ROWS]:
+        name = filter_led_chars(arrival["displayName"])
+        time_str = arrival["displayTime"]
+        is_due = arrival["isDue"]
+        if short_times:
+            time_str = time_str.replace(" min", "")
+            if is_due:
+                time_str = "0"
+                is_due = False
+        time_width = font.text_width(time_str)
+        name_clip_x = DISPLAY_WIDTH - time_width - gap_px
+        name_budget = name_clip_x - LEFT_PAD
+        # Ignore 1 px of overflow — that's the glyph's trailing bearing, not
+        # a missing pixel.
+        raw_overflow = font.text_width(name) - name_budget
+        overflow = raw_overflow + SCROLL_END_GAP if raw_overflow > 1 else 0
+        # Char-boundary truncation for the paused states so no partial glyph
+        # shows at either edge. display_name_end's SCROLL_END_GAP margin
+        # matches where the scroll animation lands at the end.
+        if overflow:
+            display_name = font.truncate_to_width(name, name_budget)
+            display_name_end = font.truncate_from_end(name, name_budget - SCROLL_END_GAP)
+        else:
+            display_name = name
+            display_name_end = name
+        end_width = font.text_width(display_name_end)
+        rows.append({
+            "name": name, "display_name": display_name,
+            "display_name_end": display_name_end, "end_width": end_width,
+            "time_str": time_str, "time_width": time_width,
+            "name_clip_x": name_clip_x, "overflow": overflow,
+            "is_due": is_due,
+        })
+    return rows
+
+
+def update_scroll_state(scroller, rows, now):
+    """Configure scroller from prepared row data. Resets the shared phase
+    clock if any row changed, so newly-overflowing rows don't start mid-scroll."""
+    changed = False
+    for i in range(MAX_ROWS):
+        name, overflow = ("", 0)
+        if i < len(rows):
+            name, overflow = rows[i]["name"], rows[i]["overflow"]
+        if scroller.configure(i, name, overflow):
+            changed = True
+    if changed:
+        scroller.reset_phase(now)
+
+
+def render(driver, font, layout, rows, blink_on, scroller):
+    row_tops = layout["row_tops"]
     frame_img = driver.frame_img
+    frame_img.paste(BLACK, (0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT))
 
-    draw = ImageDraw.Draw(frame_img)
-    draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), fill=BLACK)
-
-    if not data or "arrivals" not in data:
+    if not rows:
         font.draw_text(frame_img, (LEFT_PAD, row_tops[1]), "No data", YELLOW)
     else:
-        for i, arrival in enumerate(data["arrivals"][:MAX_ROWS]):
+        for i, row in enumerate(rows):
             y = row_tops[i]
-            name = filter_led_chars(arrival["displayName"])
-            time_str = arrival["displayTime"]
+            offset = scroller.get_offset(i)
 
-            time_width = font.text_width(time_str)
-            name_budget = DISPLAY_WIDTH - LEFT_PAD - time_width - gap_px
-            name = font.truncate_to_width(name, name_budget)
-
-            font.draw_text(frame_img, (LEFT_PAD, y), name, YELLOW)
-            # When blinking off for due trains, drop the time only.
-            if not (arrival["isDue"] and not blink_on):
+            if scroller.is_at_end(i):
+                end_x = row["name_clip_x"] - SCROLL_END_GAP - row["end_width"]
+                font.draw_text(frame_img, (end_x, y), row["display_name_end"], YELLOW)
+            elif offset == 0:
+                font.draw_text(frame_img, (LEFT_PAD, y), row["display_name"], YELLOW)
+            else:
+                font.draw_text(frame_img, (LEFT_PAD - offset, y), row["name"], YELLOW,
+                               min_x=LEFT_PAD, clip_x=row["name_clip_x"])
+            if blink_on or not row["is_due"]:
                 font.draw_text(
                     frame_img,
-                    (DISPLAY_WIDTH - time_width, y),
-                    time_str,
+                    (DISPLAY_WIDTH - row["time_width"], y),
+                    row["time_str"],
                     YELLOW,
                 )
 
@@ -337,8 +504,9 @@ def measure_layout(font):
     """Compute per-row top-y positions and the name/time gap in pixels."""
     char_height = max(1, font.line_height)
 
-    # Minimum gap between name and time: width of a space glyph, or 2 px.
-    gap_px = max(2, font.char_width(" "))
+    # Gap between name and time: one pixel less than a space glyph (the
+    # font already leaves ~1 px of right-side bearing on each side).
+    gap_px = max(2, font.char_width(" ") - 1)
 
     row_tops = [i * (char_height + ROW_GAP) for i in range(MAX_ROWS)]
 
@@ -365,6 +533,11 @@ def main():
         help="LED matrix driver (default: auto-detect from Pi model)",
     )
     parser.add_argument(
+        "--short-times",
+        action="store_true",
+        help='Drop " min" from arrival times to show more of the destination',
+    )
+    parser.add_argument(
         "--gpio-slowdown",
         type=int,
         default=2,
@@ -380,12 +553,15 @@ def main():
     layout = measure_layout(font)
 
     driver = create_driver(driver_name, gpio_slowdown=args.gpio_slowdown)
+    scroller = TextScroller()
 
     data = None
+    rows = []
     last_fetch = 0
+    last_data_id = None
     blink_on = True
     last_blink = time.monotonic()
-    last_render_key = None
+    last_scroll_tick = time.monotonic()
 
     # Translate SIGTERM (e.g. `systemctl stop`) into the same clean shutdown
     # path as Ctrl+C, so the display is cleared before the process exits.
@@ -401,29 +577,35 @@ def main():
     try:
         while True:
             now = time.monotonic()
+            need_redraw = False
 
             if now - last_fetch >= args.refresh:
                 data = fetch_arrivals(args.command) or data  # keep stale on failure
                 last_fetch = now
 
+            if id(data) != last_data_id:
+                rows = prepare_rows(font, layout, data, args.short_times)
+                update_scroll_state(scroller, rows, now)
+                last_data_id = id(data)
+                need_redraw = True
+
             if now - last_blink >= BLINK_INTERVAL:
                 blink_on = not blink_on
                 last_blink = now
+                need_redraw = True
 
-            # Only redraw when something the frame depends on actually changed.
-            # id(data) flips on each successful fetch (new dict), blink_on
-            # flips every BLINK_INTERVAL — everything else is a no-op frame.
-            render_key = (id(data), blink_on)
-            if render_key != last_render_key:
-                render(driver, font, layout, data, blink_on)
-                last_render_key = render_key
+            if now - last_scroll_tick >= SCROLL_TICK:
+                if scroller.tick(now):
+                    need_redraw = True
+                last_scroll_tick = now
+
+            if need_redraw:
+                render(driver, font, layout, rows, blink_on, scroller)
 
             time.sleep(0.05)
     except KeyboardInterrupt:
         print("\nShutting down")
-        # Clear the display on exit
-        draw = ImageDraw.Draw(driver.frame_img)
-        draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), fill=BLACK)
+        driver.frame_img.paste(BLACK, (0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT))
         driver.commit()
 
 

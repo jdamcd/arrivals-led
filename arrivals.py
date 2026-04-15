@@ -347,10 +347,9 @@ def main():
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, _raise_interrupt)
 
-    print(f"Starting LED display ({driver_name}), refreshing every {REFRESH_INTERVAL}s")
-    print(f"Command: {args.command}")
-    print(f"Layout: row tops {layout['row_tops']}, "
-          f"line height {layout['char_height']}, gap {layout['gap_px']}px")
+    print(f"Starting LED display: {driver_name}")
+    print(f"Command: {args.command} (every {REFRESH_INTERVAL}s)")
+    print(f"Layout: row tops {layout['row_tops']}, line height {layout['char_height']}")
 
     try:
         while True:

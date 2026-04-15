@@ -22,7 +22,7 @@ Supported Pi boards:
 3. Power both panels from the same 5V rail
 4. The library treats the pair as a single 128×32 display via `Geometry(width=128, height=32, ...)`
 
-If panel 2 appears flipped or mirrored, either flip it physically or change `Orientation.Normal` to `Orientation.R180` in `arrivals.py`.
+If panel 2 appears flipped or mirrored, either flip it physically or change `Orientation.Normal` to `Orientation.R180` in `led_matrix.py`.
 
 ## Pi software setup
 
@@ -125,7 +125,7 @@ I've included a couple of models for 3D-printed parts that might be useful:
      pip install git+https://github.com/lehni/Adafruit_Blinka_Raspberry_Pi5_Piomatter.git@pin-blit-thread-to-isolated-cpu
      ```
      See [Piomatter PR #79](https://github.com/adafruit/Adafruit_Blinka_Raspberry_Pi5_Piomatter/pull/79) for details. The rgbmatrix driver picks up the isolated core automatically.
-- **Colours look wrong**: The panels are assumed to be wired in RBG order. If your panels use standard RGB wiring, change `CHANNEL_PERM` to `[0, 1, 2]` in `arrivals.py` and set `led_rgb_sequence` to `"RGB"` in `RGBMatrixDriver`.
+- **Colours look wrong**: The panels are assumed to be wired in RBG order. If your panels use standard RGB wiring, change `RGB_SEQUENCE = "RBG"` to `"RGB"` in `arrivals.py`.
 - **Power**: If you have any power issues, try powering the Pi separately via its standard USB adapter.
 
 ## Attribution

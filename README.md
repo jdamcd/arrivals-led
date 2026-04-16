@@ -111,7 +111,7 @@ sudo systemctl enable --now arrivals-led-root
 I've included a couple of models for 3D-printed parts that might be useful:
 
 - Bracket to connect the 2x LED panels horizontally (with M3 screws)
-- Riser to attach a Pi 5 (with M2.5 & M3 screws)
+- Riser to attach a Pi 5 or Pi Zero 2 (with M2.5 & M3 screws)
 
 ![The back of the hardware](readme-img/led_back.jpeg)
 

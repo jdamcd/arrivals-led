@@ -4,6 +4,8 @@ Public transit arrivals on a 128×32 HUB75 LED display, driven by a Raspberry Pi
 
 ![LED matrix showing train arrivals](readme-img/led_matrix.jpeg)
 
+There's more detail in this [blog post](https://jdamcd.blog/posts/led-arrivals/).
+
 ## Hardware
 
 Common setup:
@@ -12,8 +14,8 @@ Common setup:
 - 5V power supply (10A recommended to power both panels)
 
 Supported Pi boards:
-- **Raspberry Pi 5** — uses the [Piomatter](https://github.com/adafruit/Adafruit_Blinka_Raspberry_Pi5_Piomatter) driver (PIO-based)
 - **Raspberry Pi Zero 2 W** — uses hzeller's [rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) driver via the Adafruit install script
+- **Raspberry Pi 5** — uses the [Piomatter](https://github.com/adafruit/Adafruit_Blinka_Raspberry_Pi5_Piomatter) driver (PIO-based)
 
 ### Chaining the panels
 
@@ -26,13 +28,13 @@ If panel 2 appears flipped or mirrored, either flip it physically or change `Ori
 
 ## Pi software setup
 
-### Raspberry Pi 5
-
-Follow the Adafruit [Pi 5 RGB Matrix Panel guide](https://learn.adafruit.com/rgb-matrix-panels-with-raspberry-pi-5) first to install the Piomatter library system deps and udev rules (so `/dev/pio0` is accessible without `sudo`).
-
 ### Raspberry Pi Zero 2 W
 
 Follow the Adafruit [RGB Matrix Bonnet guide](https://learn.adafruit.com/adafruit-rgb-matrix-bonnet-for-raspberry-pi) and run the install script to compile and install the `rgbmatrix` Python library.
+
+### Raspberry Pi 5
+
+Follow the Adafruit [Pi 5 RGB Matrix Panel guide](https://learn.adafruit.com/rgb-matrix-panels-with-raspberry-pi-5) first to install the Piomatter library system deps and udev rules (so `/dev/pio0` is accessible without `sudo`).
 
 ### Install project dependencies
 
@@ -42,7 +44,7 @@ Clone this repo on the Pi and run:
 ./install.sh
 ```
 
-The script detects your Pi model and installs the correct driver. On Pi 5 it installs Piomatter via pip; on Pi Zero 2 it builds the rgbmatrix Python bindings from `~/rpi-rgb-led-matrix` into the venv.
+The script detects your Pi model and installs the correct driver. On Pi Zero 2 it builds the rgbmatrix Python bindings from `~/rpi-rgb-led-matrix` into the venv; on Pi 5 it installs Piomatter via pip.
 
 ## Install the arrivals CLI
 
@@ -82,6 +84,17 @@ sudo venv/bin/python arrivals.py "arrivals --json tfl --station 910GSHRDHST --pl
 
 ## Optional: auto-start via systemd
 
+### Pi Zero 2 (system service, runs as root)
+
+There's a template in `systemd/arrivals-led-root.service`. To install:
+
+```bash
+# Edit the ExecStart line to point at your preferred station and user home
+sudo cp systemd/arrivals-led-root.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now arrivals-led-root
+```
+
 ### Pi 5 (user service)
 
 There's a template in `systemd/arrivals-led.service`. To install:
@@ -95,23 +108,12 @@ systemctl --user enable --now arrivals-led
 loginctl enable-linger $USER   # So it runs when you're not logged in
 ```
 
-### Pi Zero 2 (system service, runs as root)
-
-There's a template in `systemd/arrivals-led-root.service`. To install:
-
-```bash
-# Edit the ExecStart line to point at your preferred station and user home
-sudo cp systemd/arrivals-led-root.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now arrivals-led-root
-```
-
 ## Parts
 
 I've included a couple of models for 3D-printed parts that might be useful:
 
 - Bracket to connect the 2x LED panels horizontally (with M3 screws)
-- Riser to attach a Pi 5 or Pi Zero 2 (with M2.5 & M3 screws)
+- Riser to attach the Raspberry Pi Zero 2 & bonnet (with M2.5 & M3 screws)
 
 ![The back of the hardware](readme-img/led_back.jpeg)
 
